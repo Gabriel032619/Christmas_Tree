@@ -49,16 +49,7 @@
       margin-top: 6px;
       font-size: 12px;
       opacity: 0.85;
-    }
-
-    .chip {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 999px;
-      border: 1px solid rgba(255, 255, 255, 0.4);
-      background: rgba(0, 0, 0, 0.45);
-      margin: 0 3px;
-      font-size: 11px;
+      letter-spacing: 0.06em;
     }
 
     .hint {
@@ -88,11 +79,10 @@
   <!-- 在 three.js 之前：根据 URL 参数设置祝福语 -->
   <script>
     (function () {
-      // 默认祝福语
       const defaultWish = "Wishing you peace, joy & love.";
       const params = new URLSearchParams(window.location.search);
 
-      // 支持多种参数名：?wish= / ?msg= / ?text=
+      // 支持 ?wish= / ?msg= / ?text=
       let wishText =
         params.get("wish") ||
         params.get("msg") ||
@@ -103,19 +93,12 @@
         wishText = defaultWish;
       }
 
-      // 简单长度限制，防止太长撑坏布局
       wishText = wishText.trim().slice(0, 80);
 
       const el = document.getElementById("wish-line");
-      if (el) {
-        el.textContent = wishText;
-      }
+      if (el) el.textContent = wishText;
     })();
   </script>
-
-  <div class="hint">
-    ✨ Merry Christmas
-  </div>
 
   <!-- three.js 旧接口版本，兼容 examples/js -->
   <script src="https://unpkg.com/three@0.140.0/build/three.min.js"></script>
@@ -208,7 +191,10 @@
     const TREE_HEIGHT = 60;
     const TREE_BASE_RADIUS = 24;
 
-    // =============== 3. 树：下半层次感，上半圆润尖，且上半每层更矮 ===============
+    // 渐变出现控制
+    const REVEAL_DURATION = 4.0;  // 从下到上“长出来”的时间（秒）
+
+    // =============== 3. 点云圣诞树 ===============
     function createPointCloudTree() {
       const treeHeight = TREE_HEIGHT;
       const baseRadius = TREE_BASE_RADIUS;
@@ -235,15 +221,14 @@
       }
 
       for (let i = 0; i < pointCount; i++) {
-        // 非线性分布：上半部分高度压缩
-        const u = Math.random(); // [0,1]
+        const u = Math.random();
         let t;
         if (u < 0.6) {
           t = u;
         } else {
-          const v = (u - 0.6) / 0.4; // 0~1
-          const topSpan = 0.30;      // 顶部只占总高度 25%
-          t = 0.6 + topSpan * v;     // t ∈ [0.6, 0.85]
+          const v = (u - 0.6) / 0.4;
+          const topSpan = 0.30;
+          t = 0.6 + topSpan * v;
         }
         const y = t * treeHeight;
         const layer = 1 - t;
@@ -251,16 +236,14 @@
         let radiusProfile = baseRadius * layer;
         radiusProfile *= bandRadiusFactor(t);
 
-        // 下半层次感，上半平滑收尖
         if (t < 0.66) {
           radiusProfile = Math.floor(radiusProfile / 2) * 2 + 1.0;
         } else {
-          const smoothT = (t - 0.66) / (1 - 0.66); // 0~1
-          const shrink = 1.0 - smoothT * 0.10;     // 顶部最多缩 10%
+          const smoothT = (t - 0.66) / (1 - 0.66);
+          const shrink = 1.0 - smoothT * 0.10;
           radiusProfile *= shrink;
         }
 
-        // 顶部轻微扩散，让头部更圆润
         if (t > 0.80) {
           radiusProfile *= 1.04 + Math.random() * 0.06;
         }
@@ -280,13 +263,13 @@
         const ornamentChance = Math.random();
 
         if (ornamentChance < 0.06) {
-          color.setHSL(0.16, 0.82, 0.72);   // 明黄
+          color.setHSL(0.16, 0.82, 0.72);
         } else if (ornamentChance < 0.12) {
-          color.setHSL(0.12, 0.85, 0.68);   // 柔黄
+          color.setHSL(0.12, 0.85, 0.68);
         } else if (ornamentChance < 0.18) {
-          color.setHSL(0.30, 0.6, 0.68);    // 黄绿
+          color.setHSL(0.30, 0.6, 0.68);
         } else if (ornamentChance < 0.26) {
-          color.setHSL(0.98, 0.8, 0.58);    // 偏暗红灯
+          color.setHSL(0.98, 0.8, 0.58);
         } else {
           const h = 0.32 + 0.03 * Math.random();
           const s = 0.65 + 0.2 * Math.random();
@@ -308,6 +291,7 @@
         map: circleTexture,
         vertexColors: true,
         transparent: true,
+        opacity: 0.0,            // 初始完全透明
         alphaTest: 0.4,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
@@ -316,6 +300,9 @@
 
       const points = new THREE.Points(geometry, material);
       points.name = 'treePointCloud';
+      // 初始高度压扁，后面渐渐“长起来”
+      points.scale.y = 0.05;
+      points.position.y = (TREE_HEIGHT * 0.5) * (points.scale.y - 1);
       return points;
     }
 
@@ -326,32 +313,27 @@
     function createStarTop() {
       const group = new THREE.Group();
 
-      // ---- 1. 定义 2D 五角星形状 ----
-      const outerRadius = 4.0;   // 外圈半径：控制星星整体大小
-      const innerRadius = 1.8;   // 内圈半径：控制星星尖锐程度
+      const outerRadius = 4.0;
+      const innerRadius = 1.8;
 
       const starShape = new THREE.Shape();
-      const totalPoints = 10;    // 外点 + 内点 交替 = 10
+      const totalPoints = 10;
 
       for (let i = 0; i < totalPoints; i++) {
         const isOuter = (i % 2 === 0);
         const r = isOuter ? outerRadius : innerRadius;
-        const angle = (i / totalPoints) * Math.PI * 2 + Math.PI / 2; // 从正上方开始
+        const angle = (i / totalPoints) * Math.PI * 2 + Math.PI / 2;
 
         const x = Math.cos(angle) * r;
         const y = Math.sin(angle) * r;
 
-        if (i === 0) {
-          starShape.moveTo(x, y);
-        } else {
-          starShape.lineTo(x, y);
-        }
+        if (i === 0) starShape.moveTo(x, y);
+        else starShape.lineTo(x, y);
       }
       starShape.closePath();
 
-      // ---- 2. 将 2D 星形挤出为有厚度的 3D 星星 ----
       const extrudeSettings = {
-        depth: 1.6,           // 厚度
+        depth: 1.6,
         bevelEnabled: true,
         bevelThickness: 0.5,
         bevelSize: 0.4,
@@ -360,13 +342,10 @@
       };
 
       const starGeo = new THREE.ExtrudeGeometry(starShape, extrudeSettings);
-      starGeo.center();  // 把星星中心移到 (0,0,0)
+      starGeo.center();
 
       const starMat = new THREE.MeshStandardMaterial({
-        // 淡黄色主色
-        // color: 0xfff5c0,
         color: 0xffff44,
-        // 柔和自发光，让它微微亮一点
         emissive: 0xfff0a0,
         emissiveIntensity: 0.65,
         metalness: 0.4,
@@ -374,11 +353,9 @@
       });
 
       const coreStar = new THREE.Mesh(starGeo, starMat);
-      // 让星星正面朝向摄像机（树在 Y 轴旋转，这样看什么角度都 OK）
       coreStar.rotation.y = Math.PI;
       group.add(coreStar);
 
-      // ---- 3. 淡黄色光晕点云 Halo ----
       const haloCount = 420;
       const pos = new Float32Array(haloCount * 3);
       const col = new Float32Array(haloCount * 3);
@@ -399,7 +376,6 @@
         pos[idx + 2] = z;
 
         const t = Math.random();
-        // 淡黄色到微暖白色的渐变
         c.setHSL(0.14 + 0.04 * t, 0.7, 0.7 + 0.1 * t);
         col[idx]     = c.r;
         col[idx + 1] = c.g;
@@ -412,7 +388,7 @@
 
       const haloMat = new THREE.PointsMaterial({
         size: 0.3,
-        map: circleTexture,       // 用你前面生成的圆形纹理
+        map: circleTexture,
         vertexColors: true,
         transparent: true,
         alphaTest: 0.4,
@@ -423,47 +399,33 @@
       const halo = new THREE.Points(haloGeo, haloMat);
       group.add(halo);
 
-      // ---- 4. 星星整体位置：略高于树尖一点点 ----
-      group.position.set(0, TREE_HEIGHT / 2 - 2, 0);
+      // 初始从树顶附近缓慢升到最终位置
+      group.position.set(0, TREE_HEIGHT / 2 - 10, 0);
 
       return { group, halo };
     }
 
-    // 保持这两行不变
     const starObj = createStarTop();
     scene.add(starObj.group);
 
-    // =============== 5. 蛇形淡黄色点云螺旋（底部更粗，上部更细） ===============
+    // =============== 5. 蛇形淡黄色点云螺旋 ===============
     class SpiralCurve extends THREE.Curve {
       constructor(height, baseRadius) {
         super();
         this.height = height;
         this.baseRadius = baseRadius;
       }
-
       getPoint(t, target = new THREE.Vector3()) {
-
-        // 螺旋从 12% 高度开始，到 88% 高度结束
         const tt = 0.12 + 0.76 * t;
-
-        // 垂直高度
         const y = tt * this.height - this.height / 2 + 1.5;
 
-        // 跟随树的层级
         const layer = 1 - tt;
         let rTree = this.baseRadius * layer;
 
-        // ⭐ 关键：蛇形随高度变细
-        // 底部更粗（1.35），顶部细一点（0.95）
         const thickness = 1.05 - (1.15 - 0.95) * t;
-
-        // 对树半径进行扩展，让蛇“刚好比树大一点”
         let r = rTree * 1.03 * thickness;
-
-        // 轻微起伏，让曲线不死板
         r *= 1.0 + 0.04 * Math.sin(tt * 4.0 * Math.PI);
 
-        // 螺旋圈数
         const turns = 4.4;
         const angle = tt * turns * Math.PI * 2;
 
@@ -478,11 +440,10 @@
     function createSpiralSnakeCloud() {
       const curve = new SpiralCurve(TREE_HEIGHT, TREE_BASE_RADIUS);
 
-      const count = 800; // ★ 更细腻的蛇（原来 800 太少）
+      const count = 800;
       const positions = new Float32Array(count * 3);
       const colors = new Float32Array(count * 3);
 
-      // 淡黄色
       const color = new THREE.Color();
       color.setHSL(0.16, 0.85, 0.78);
 
@@ -494,7 +455,6 @@
         let y = p.y;
         let z = p.z;
 
-        // ★ 蛇的粗细随高度变化
         const radiusJitter = (1.5 - 0.8 * t) * 0.4;
         const angle = Math.random() * Math.PI * 2;
         const offset = Math.random() * radiusJitter;
@@ -515,10 +475,11 @@
       geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 
       const material = new THREE.PointsMaterial({
-        size: 2.0,              // ★ 更粗一点
+        size: 2.0,
         map: circleTexture,
         vertexColors: true,
         transparent: true,
+        opacity: 0.0,            // 初始透明
         alphaTest: 0.4,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
@@ -527,6 +488,9 @@
 
       const points = new THREE.Points(geometry, material);
       points.name = "spiralSnakeCloud";
+      // 初始缩成很细一条，与树一起长出来
+      points.scale.y = 0.05;
+      points.position.y = (TREE_HEIGHT * 0.5) * (points.scale.y - 1);
       return points;
     }
 
@@ -537,41 +501,35 @@
     function createRedOrnaments() {
       const group = new THREE.Group();
 
-      const orbCount = 8;           // 挂坠数量
-      const baseRadiusScale = 0.9;   // 挂坠距离树中心的大致比例
+      const orbCount = 8;
+      const baseRadiusScale = 0.9;
 
-      // 复用同一个几何体和材质，性能更好
-      const baseGeometry = new THREE.SphereGeometry(1, 24, 24); // 半径1，后面用缩放微调
+      const baseGeometry = new THREE.SphereGeometry(1, 24, 24);
       const baseMaterial = new THREE.MeshStandardMaterial({
-        color: 0xcc2233,     // 深一点的红色，避免太艳
-        emissive: 0xff3333,       // 红色自发光
-        emissiveIntensity: 0.65,  // 发光强度提高
+        color: 0xcc2233,
+        emissive: 0xff3333,
+        emissiveIntensity: 0.65,
         metalness: 0.1,
         roughness: 0.45
       });
 
       for (let k = 0; k < orbCount; k++) {
-        // 挂在树的中下部区域：t 越小越靠下
-        const t = 0.12 + 0.45 * Math.random(); // 约 0.12 ~ 0.57
+        const t = 0.12 + 0.45 * Math.random();
         const y = t * TREE_HEIGHT - TREE_HEIGHT / 2;
 
         const layer = 1 - t;
         const treeRadius = TREE_BASE_RADIUS * layer * baseRadiusScale;
 
-        // 挂在树外侧一点点
         const theta = Math.random() * Math.PI * 2;
-        const rOut = treeRadius * 1.05;  // 比树稍微大一点
+        const rOut = treeRadius * 1.05;
         const cx = Math.cos(theta) * rOut;
         const cz = Math.sin(theta) * rOut;
         const cy = y;
 
-        // 实例化一个小球
         const orb = new THREE.Mesh(baseGeometry, baseMaterial);
-        // 每颗灯稍微有点大小差异
-        const s = 0.7 + Math.random() * 0.4; // 0.7~1.1 倍
+        const s = 0.7 + Math.random() * 0.4;
         orb.scale.set(s, s, s);
 
-        // 位置：略微随重力方向偏一点，让它看起来“挂着”
         orb.position.set(
           cx,
           cy - 0.4 * s,
@@ -582,6 +540,7 @@
       }
 
       group.name = 'redOrnamentsMesh';
+      group.visible = false; // 等树长出来再显示
       return group;
     }
 
@@ -643,8 +602,12 @@
       scene.add(mesh);
     })();
 
-    // =============== 9. 动画循环 ===============
+    // =============== 9. 动画循环（包含“从下到上渐变出现”） ===============
     const clock = new THREE.Clock();
+
+    function easeOutCubic(x) {
+      return 1 - Math.pow(1 - x, 3);
+    }
 
     function animate() {
       requestAnimationFrame(animate);
@@ -652,13 +615,43 @@
       const delta   = clock.getDelta();
       const elapsed = clock.getElapsedTime();
 
+      // ---- 渐变出现进度 ----
+      const tRaw = Math.min(elapsed / REVEAL_DURATION, 1.0);
+      const tReveal = easeOutCubic(tRaw);
+
+      // 树从底部“长起来”：缩放 Y + 上移保持底部贴地
+      const baseY = -TREE_HEIGHT * 0.5;
+      const treeScaleY = 0.05 + 0.95 * tReveal;
+      tree.scale.y = treeScaleY;
+      tree.position.y = baseY - baseY * treeScaleY;
+      tree.material.opacity = tReveal;
+
+      // 螺旋光带与树同步
+      spiralSnake.scale.y = treeScaleY;
+      spiralSnake.position.y = baseY - baseY * treeScaleY;
+      spiralSnake.material.opacity = tReveal;
+
+      // 星星从树身中间慢慢“升到”顶部
+      const starBaseY = TREE_HEIGHT / 2 - 10;
+      const starTargetY = TREE_HEIGHT / 2 - 2;
+      starObj.group.position.y =
+        starBaseY + (starTargetY - starBaseY) * tReveal;
+
+      // 当树大致长完时再显示红色挂坠
+      if (tReveal > 0.99) {
+        redOrnaments.visible = true;
+      }
+
+      // 星星轻微动效
       starObj.group.rotation.y = elapsed * 0.35;
       starObj.halo.rotation.y  = -elapsed * 0.18;
       const pulse = 1 + Math.sin(elapsed * 1.7) * 0.03;
       starObj.group.scale.setScalar(pulse);
 
+      // 螺旋整体轻微左右摆动
       spiralSnake.rotation.y = Math.sin(elapsed * 0.3) * 0.1;
 
+      // 雪花
       const posAttr = snow.geometry.getAttribute('position');
       const speeds  = snow.userData.speeds;
       const rangeY  = snow.userData.rangeY;
