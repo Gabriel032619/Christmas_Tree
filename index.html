@@ -274,7 +274,7 @@
                 gestureStatus.classList.add('active');
                 const landmarks = results.multiHandLandmarks[0];
 
-                // 爆炸
+                // 爆炸（只有手势控制 interaction.isGrabbing）
                 let extended = 0;
                 const tips = [8, 12, 16, 20]; const bases = [5, 9, 13, 17];
                 const wrist = landmarks[0];
@@ -347,10 +347,8 @@
         }
         setInterval(updateCountdown, 1000); updateCountdown();
 
-        window.addEventListener('mousedown', () => { if(!isCameraRunning) interaction.isGrabbing = true; });
-        window.addEventListener('mouseup', () => { if(!isCameraRunning) interaction.isGrabbing = false; });
-        window.addEventListener('touchstart', () => { if(!isCameraRunning) interaction.isGrabbing = true; });
-        window.addEventListener('touchend', () => { if(!isCameraRunning) interaction.isGrabbing = false; });
+        // ⚠️ 这里不再用鼠标/触控去改 interaction.isGrabbing，避免点击触发爆炸
+        // 仅保留点击事件用于点礼物/打开卡片
 
         // === Three.js 场景 ===
         const container = document.getElementById('app');
@@ -538,10 +536,12 @@
 
             group.add(box, rib1, rib2);
 
-            // 随机分布
+            // 随机分布（更贴近树附近）
             const angle = Math.random() * Math.PI * 2;
-            const radius = 25 + Math.random() * 25;
-            const y = -10 + Math.random() * 50;
+            const minRadius = TREE_BASE_RADIUS * 0.5;   // 更靠近树干
+            const maxRadius = TREE_BASE_RADIUS * 1.05;  // 稍稍超出树枝
+            const radius = minRadius + Math.random() * (maxRadius - minRadius);
+            const y = -10 + Math.random() * 30;
 
             group.position.set(Math.cos(angle) * radius, y, Math.sin(angle) * radius);
 
@@ -566,7 +566,7 @@
             wishes.forEach(msg => createFloatingGift(msg));
         });
 
-        // 点击检测
+        // 点击检测（只负责开礼物卡片，不参与爆炸）
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
 
