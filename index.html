@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>圣诞树 🎄</title>
+  <title>圣诞树 🎄 (全能手势版)</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body {
@@ -48,22 +48,43 @@
     }
     .share-btn:hover { background: rgba(255,255,255,0.3); }
 
-    .hint-text {
-        position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-        font-size: 12px; opacity: 0.5; pointer-events: none; z-index: 5;
-        text-align: center;
-        text-shadow: 0 2px 2px rgba(0,0,0,1);
-    }
-
     .lil-gui { top: 20px !important; left: 20px !important; }
 
-    /* 加载提示 */
+    /* === 摄像头状态 UI (隐形版) === */
+    .cam-status-bar {
+        position: fixed; bottom: 20px; left: 20px; z-index: 30;
+        display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+    }
+    #cameraBtn {
+        padding: 8px 16px; border-radius: 20px;
+        background: rgba(0, 255, 128, 0.15); backdrop-filter: blur(4px);
+        border: 1px solid rgba(0, 255, 128, 0.4); color: #cfc;
+        cursor: pointer; font-size: 12px; transition: 0.3s;
+    }
+    #cameraBtn:hover { background: rgba(0, 255, 128, 0.3); }
+
+    .status-text {
+        font-size: 12px; font-family: monospace;
+        color: rgba(255,255,255,0.7);
+        background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 4px;
+        opacity: 0; transition: opacity 0.3s; pointer-events: none;
+        white-space: pre-wrap; line-height: 1.4;
+    }
+    .status-text.active { opacity: 1; }
+
+    #input_video { display: none; }
+
     #loading {
         position: fixed; inset: 0; background: #000; z-index: 100;
         display: flex; justify-content: center; align-items: center;
         color: #8f8; font-family: monospace; transition: opacity 0.5s;
     }
   </style>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 </head>
 <body>
   <div id="loading">Loading Christmas Magic...</div>
@@ -75,14 +96,18 @@
     <div class="countdown" id="countdown"></div>
   </div>
 
-  <div class="hint-text">按住屏幕 / 长按鼠标 可炸开粒子 ✨</div>
-
   <div class="music-btn" id="musicBtn" title="Play Music">
     <div class="music-icon">🎵</div>
   </div>
   <audio id="bgm" loop src="https://cdn.pixabay.com/download/audio/2022/11/22/audio_febc508520.mp3?filename=christmas-magic-126466.mp3"></audio>
 
   <div class="share-btn" id="shareBtn">📤 发送祝福</div>
+
+  <div class="cam-status-bar">
+      <button id="cameraBtn">📷 开启手势控制 (全能版)</button>
+      <div class="status-text" id="gestureStatus">系统待机中...</div>
+  </div>
+  <video id="input_video"></video>
 
   <script src="https://cdn.jsdelivr.net/npm/three@0.140.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.140.0/examples/js/controls/OrbitControls.js"></script>
@@ -95,22 +120,113 @@
   <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.17.0/dist/lil-gui.umd.min.js"></script>
 
   <script>
-    // 强制等待页面资源加载完毕
     window.addEventListener('load', function() {
-
-        // 检查库是否加载成功
         if (typeof THREE === 'undefined') {
-            document.getElementById('loading').innerText = "加载失败！网络防火墙拦截了资源。\n(尝试断开公司/学校VPN或使用手机热点)";
+            document.getElementById('loading').innerText = "加载失败，请刷新";
             document.getElementById('loading').style.color = "red";
             return;
         }
-
-        // 隐藏加载条
         const loadingEl = document.getElementById('loading');
         loadingEl.style.opacity = '0';
         setTimeout(() => loadingEl.remove(), 500);
 
-        // === 1. UI 与 交互 ===
+        // === 0. 摄像头与手势识别逻辑 ===
+        const interaction = { isGrabbing: false, explosionFactor: 0.0 };
+        let isCameraRunning = false;
+
+        // 运动控制变量
+        let gestureRotateSpeed = 0.5; // 水平旋转速度
+        let targetCameraY = 30;       // 目标相机高度 (默认30)
+        let currentCameraY = 30;      // 当前相机高度
+
+        const videoElement = document.getElementById('input_video');
+        const gestureStatus = document.getElementById('gestureStatus');
+        const cameraBtn = document.getElementById('cameraBtn');
+
+        function onResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                gestureStatus.classList.add('active');
+                const landmarks = results.multiHandLandmarks[0];
+
+                // 1. 抓取逻辑 (开掌/握拳)
+                let extendedFingers = 0;
+                const tips = [8, 12, 16, 20]; const bases = [5, 9, 13, 17];
+                const wrist = landmarks[0];
+                function dist(p1, p2) { return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2)); }
+                for (let i = 0; i < 4; i++) {
+                    if (dist(wrist, landmarks[tips[i]]) > dist(wrist, landmarks[bases[i]]) * 1.3) extendedFingers++;
+                }
+                if (dist(landmarks[4], landmarks[17]) > 0.15) extendedFingers++;
+
+                let statusStr = "";
+                if (extendedFingers >= 4) {
+                    interaction.isGrabbing = true;
+                    statusStr = "🖐️ 状态: 爆炸!\n";
+                } else if (extendedFingers <= 2) {
+                    interaction.isGrabbing = false;
+                    statusStr = "✊ 状态: 收缩\n";
+                } else {
+                    statusStr = "✋ 状态: 识别中\n";
+                }
+
+                // 2. 水平旋转逻辑 (X轴) - 加大灵敏度 (* 30.0)
+                const handX = landmarks[9].x;
+                // 偏移量：中心0.5，偏移越多转越快
+                const offset = (0.5 - handX) * 35.0; // 之前的 15 改为 35，极大提高灵敏度
+                gestureRotateSpeed += (offset - gestureRotateSpeed) * 0.1;
+
+                let hStr = "↔️ 水平: 平稳";
+                if(handX > 0.6) hStr = "⏪ 向左疾速";
+                if(handX < 0.4) hStr = "⏩ 向右疾速";
+
+                // 3. 垂直视角逻辑 (Y轴) - 新增
+                // MediaPipe Y: 0(顶) -> 1(底)
+                // 手越高(y小) -> 相机越高(y大, 俯视)
+                const handY = landmarks[9].y;
+
+                // 映射手部高度到相机高度范围 [5, 80]
+                // 1.0 - handY 把方向反转，让手向上=数值变大
+                const targetH = 5 + (1.0 - handY) * 90;
+                targetCameraY = targetH;
+
+                let vStr = "↕️ 垂直: 中";
+                if(handY < 0.3) vStr = "⬆️ 俯视视角";
+                if(handY > 0.7) vStr = "⬇️ 仰视视角";
+
+                gestureStatus.innerText = `${statusStr}${hStr}\n${vStr}`;
+
+            } else {
+                interaction.isGrabbing = false;
+                gestureStatus.classList.remove('active');
+                // 无手时恢复默认
+                gestureRotateSpeed += (0.5 - gestureRotateSpeed) * 0.05;
+                // 无手时相机慢慢回到默认高度
+                targetCameraY += (30 - targetCameraY) * 0.05;
+            }
+        }
+
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+        hands.onResults(onResults);
+
+        cameraBtn.addEventListener('click', () => {
+            if (isCameraRunning) return;
+            cameraBtn.innerText = "正在启动...";
+            const camera = new Camera(videoElement, {
+                onFrame: async () => { await hands.send({image: videoElement}); },
+                width: 320, height: 240
+            });
+            camera.start().then(() => {
+                isCameraRunning = true;
+                cameraBtn.innerText = "🟢 全能手势已激活";
+                cameraBtn.style.borderColor = "#8f8";
+                cameraBtn.style.color = "#8f8";
+                gestureStatus.innerText = "举起手来控制一切...";
+                gestureStatus.classList.add('active');
+            }).catch(err => { alert("摄像头失败: " + err); cameraBtn.innerText = "启动失败"; });
+        });
+
+        // === 1. 常规逻辑 ===
         (function () {
           const defaultWish = "Wishing you peace, joy & love.";
           const params = new URLSearchParams(window.location.search);
@@ -123,9 +239,7 @@
             if (newMsg !== null) {
               const url = new URL(window.location.href);
               url.searchParams.set('wish', newMsg);
-              navigator.clipboard.writeText(url.toString()).then(() => {
-                alert("链接已复制！\n" + url.toString());
-              }).catch(() => alert("复制失败，请手动复制地址栏。"));
+              navigator.clipboard.writeText(url.toString()).then(() => alert("链接已复制！")).catch(() => alert("复制失败"));
             }
           });
         })();
@@ -134,40 +248,28 @@
         const audio = document.getElementById('bgm');
         let isPlaying = false;
         musicBtn.addEventListener('click', () => {
-          if (isPlaying) {
-            audio.pause();
-            musicBtn.classList.remove('playing');
-            musicBtn.innerHTML = '<div class="music-icon">🎵</div>';
-          } else {
-            audio.play().then(() => {
-              musicBtn.classList.add('playing');
-              musicBtn.innerHTML = '<div class="music-icon">⏸</div>';
-            }).catch(e => console.log("请先与页面交互再播放音乐"));
-          }
+          if (isPlaying) { audio.pause(); musicBtn.classList.remove('playing'); musicBtn.innerHTML = '<div class="music-icon">🎵</div>'; }
+          else { audio.play().then(() => { musicBtn.classList.add('playing'); musicBtn.innerHTML = '<div class="music-icon">⏸</div>'; }).catch(e => console.log(e)); }
           isPlaying = !isPlaying;
         });
 
         function updateCountdown() {
-          const now = new Date();
-          const currentYear = now.getFullYear();
-          let xmas = new Date(currentYear, 11, 25);
+          const now = new Date(); const currentYear = now.getFullYear(); let xmas = new Date(currentYear, 11, 25);
           if (now.getMonth() === 11 && now.getDate() > 25) xmas.setFullYear(currentYear + 1);
           const diff = xmas - now;
           const days = Math.floor(diff / (1000 * 60 * 60 * 24));
           const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
           const minutes = Math.floor((diff / 1000 / 60) % 60);
-          document.getElementById('countdown').innerText = days >= 0
-            ? `Countdown: ${days}d ${hours}h ${minutes}m` : "MERRY CHRISTMAS!";
+          document.getElementById('countdown').innerText = days >= 0 ? `Countdown: ${days}d ${hours}h ${minutes}m` : "MERRY CHRISTMAS!";
         }
         setInterval(updateCountdown, 1000); updateCountdown();
 
-        // === 2. 3D 场景 ===
-        const interaction = { isGrabbing: false, explosionFactor: 0.0 };
-        window.addEventListener('mousedown', () => interaction.isGrabbing = true);
-        window.addEventListener('mouseup', () => interaction.isGrabbing = false);
-        window.addEventListener('touchstart', () => interaction.isGrabbing = true);
-        window.addEventListener('touchend', () => interaction.isGrabbing = false);
+        window.addEventListener('mousedown', () => { if(!isCameraRunning) interaction.isGrabbing = true; });
+        window.addEventListener('mouseup', () => { if(!isCameraRunning) interaction.isGrabbing = false; });
+        window.addEventListener('touchstart', () => { if(!isCameraRunning) interaction.isGrabbing = true; });
+        window.addEventListener('touchend', () => { if(!isCameraRunning) interaction.isGrabbing = false; });
 
+        // === 2. Three.js ===
         function createCircleTexture() {
           const size = 64; const canvas = document.createElement('canvas'); canvas.width = size; canvas.height = size;
           const ctx = canvas.getContext('2d');
@@ -190,7 +292,9 @@
         container.appendChild(renderer.domElement);
 
         const controls = new THREE.OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true; controls.autoRotate = true; controls.autoRotateSpeed = 0.5;
+        controls.enableDamping = true;
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 0.5;
         controls.maxPolarAngle = Math.PI/2.05;
 
         scene.add(new THREE.AmbientLight(0xddeedd, 0.2));
@@ -209,10 +313,8 @@
           const colors = new Float32Array(pointCount * 3);
           const dirs = new Float32Array(pointCount * 3);
           const color = new THREE.Color();
-
           const bands = [{t:0.18,m:1.0},{t:0.35,m:0.9},{t:0.55,m:0.78},{t:0.75,m:0.65},{t:0.90,m:0.50},{t:1.0,m:0.35}];
           function getR(t) { for(let b of bands) if(t<b.t) return b.m; return 0.35; }
-
           for (let i=0; i<pointCount; i++) {
             const u = Math.random();
             let t = (u < 0.6) ? u : 0.6 + 0.30 * ((u-0.6)/0.4);
@@ -221,13 +323,10 @@
             let r = TREE_BASE_RADIUS * layer * getR(t);
             if (t < 0.66) r = Math.floor(r/2)*2+1; else r *= (1-(t-0.66)/0.34*0.1);
             r *= 0.75 + 0.3*Math.random();
-
             const angle = Math.random() * Math.PI * 2;
             const x = Math.cos(angle)*r; const z = Math.sin(angle)*r;
-
             positions[i*3] = x; positions[i*3+1] = y - TREE_HEIGHT/2; positions[i*3+2] = z;
             dirs[i*3] = x*3+(Math.random()-0.5)*20; dirs[i*3+1] = (Math.random()-0.5)*60; dirs[i*3+2] = z*3+(Math.random()-0.5)*20;
-
             const chance = Math.random();
             if(chance<0.05) color.setHSL(0.16,0.8,0.7);
             else if(chance<0.1) color.setHSL(0.98,0.8,0.6);
@@ -238,7 +337,6 @@
           geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
           geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
           geo.userData = { originalPositions: new Float32Array(positions), directions: dirs };
-
           const mat = new THREE.PointsMaterial({ size: 0.9, map: circleTexture, vertexColors: true, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
           const mesh = new THREE.Points(geo, mat);
           mesh.scale.y = 0.05; mesh.position.y = -TREE_HEIGHT/2*0.95;
@@ -253,7 +351,6 @@
           const geo = new THREE.ExtrudeGeometry(s,{depth:1.6, bevelEnabled:true, bevelThickness:0.5}); geo.center();
           const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color:0xffff44, emissive:0xfff0a0, emissiveIntensity:0.65}));
           mesh.rotation.y = Math.PI; g.add(mesh);
-
           const count=420; const pos=new Float32Array(count*3); const col=new Float32Array(count*3); const c=new THREE.Color();
           for(let i=0;i<count;i++){
             const r=3.2+Math.random()*3.5; const theta=Math.random()*Math.PI*2; const phi=Math.acos(2*Math.random()-1);
@@ -295,7 +392,13 @@
 
         function createSnow() {
           const c=2000; const pos=new Float32Array(c*3); const spd=new Float32Array(c);
-          for(let i=0;i<c;i++){ pos[i*3]=(Math.random()-0.5)*170; pos[i*3+1]=Math.random()*150; pos[i*3+2]=(Math.random()-0.5)*170; spd[i]=0.05+Math.random()*0.15; }
+          for(let i=0;i<c;i++){
+              pos[i*3]=(Math.random()-0.5)*170;
+              pos[i*3+1]=Math.random()*150;
+              pos[i*3+2]=(Math.random()-0.5)*170;
+              // 加快雪花基础速度
+              spd[i]=0.2 + Math.random()*0.5;
+          }
           const geo=new THREE.BufferGeometry(); geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
           const p=new THREE.Points(geo,new THREE.PointsMaterial({color:0xffffff,size:0.8,map:circleTexture,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false}));
           p.userData={spd,rangeY:150}; p.position.y=-10; return p;
@@ -317,6 +420,14 @@
           requestAnimationFrame(animate);
           const elapsed = clock.getElapsedTime(); const dt = clock.getDelta();
 
+          // 1. 应用手势控制的旋转速度
+          controls.autoRotateSpeed = gestureRotateSpeed;
+
+          // 2. 应用手势控制的垂直高度 (平滑过渡)
+          currentCameraY += (targetCameraY - currentCameraY) * 0.05;
+          camera.position.y = currentCameraY;
+
+          // 爆炸逻辑
           const targetFactor = interaction.isGrabbing ? 1.0 : 0.0;
           interaction.explosionFactor += (targetFactor - interaction.explosionFactor) * 0.1;
           const isExploding = interaction.explosionFactor > 0.001;
@@ -351,11 +462,20 @@
             }
           }
 
-          if(!interaction.isGrabbing) { starObj.group.rotation.y=elapsed*0.3; controls.autoRotate=true; } else controls.autoRotate=false;
+          if(!interaction.isGrabbing) { starObj.group.rotation.y=elapsed*0.3; }
           starObj.halo.rotation.y=-elapsed*0.2; spiral.rotation.y=Math.sin(elapsed*0.5)*0.1;
 
+          // 雪花下落逻辑 (加速 + 垂直化)
           const sPos = snow.geometry.getAttribute('position');
-          for(let i=0;i<2000;i++){ sPos.array[i*3+1]-=snow.userData.spd[i]*dt*60; sPos.array[i*3]+=Math.sin((elapsed+i)*0.2)*0.02; if(sPos.array[i*3+1]<-20) sPos.array[i*3+1]=150; }
+          const rangeY = 150;
+          for(let i=0;i<2000;i++){
+              // 垂直速度加快 (*100)
+              sPos.array[i*3+1] -= snow.userData.spd[i] * dt * 100;
+              // 减少水平晃动，让它看起来更直
+              sPos.array[i*3] += Math.sin((elapsed+i)*0.2)*0.01;
+
+              if(sPos.array[i*3+1] < -20) sPos.array[i*3+1] = rangeY;
+          }
           sPos.needsUpdate=true;
 
           controls.update(); composer.render();
